@@ -4,6 +4,7 @@ using UAssetAPI.ExportTypes;
 using UAssetAPI.Kismet.Bytecode;
 using UAssetAPI.Kismet.Bytecode.Expressions;
 using UAssetAPI.UnrealTypes;
+using UAssetKismet.Experimental;
 
 namespace UAssetKismet;
 
@@ -12,7 +13,12 @@ public class ExprRenderer
 {
     private static readonly Regex SelfMemberRegex = new(@"\.self\.", RegexOptions.Compiled);
     private readonly UAsset _asset;
-    public ExprRenderer(UAsset asset) => _asset = asset;
+    private readonly UhtSignatureIndex? _sigs;
+    public ExprRenderer(UAsset asset, UhtSignatureIndex? signatures = null)
+    {
+        _asset = asset;
+        _sigs = signatures;
+    }
 
     public string CleanSelf(string s) => SelfMemberRegex.Replace(s, ".");
 
@@ -40,8 +46,8 @@ public class ExprRenderer
                 return $"{RenderVariablePath(l.DestinationProperty)} = {Render(l.AssignmentExpression)}";
 
             // 函数调用（子类在前）
-            case EX_CallMath f: return $"{ResolveStackNode(f.StackNode)}({RenderParams(f.Parameters)})";
-            case EX_FinalFunction f: return $"{ResolveStackNode(f.StackNode)}({RenderParams(f.Parameters)})";
+            case EX_CallMath f: return $"{ResolveCallName(f.StackNode)}({RenderParams(f.Parameters)})";
+            case EX_FinalFunction f: return $"{ResolveCallName(f.StackNode)}({RenderParams(f.Parameters)})";
             case EX_LocalVirtualFunction f: return $"{f.VirtualFunctionName}({RenderParams(f.Parameters)})";
             case EX_VirtualFunction f: return $"{f.VirtualFunctionName}({RenderParams(f.Parameters)})";
             case EX_InstanceDelegate d: return d.FunctionName.ToString();
@@ -107,6 +113,18 @@ public class ExprRenderer
         if (idx.Index < 0 && -idx.Index - 1 < _asset.Imports.Count)
             return _asset.Imports[-idx.Index - 1].ObjectName.ToString();
         return $"<fn:{idx.Index}>";
+    }
+
+    /// <summary>解析函数名；命中 UHT 签名时渲染为 类::函数 形式（import 方向）。</summary>
+    public string ResolveCallName(FPackageIndex idx)
+    {
+        var plain = ResolveStackNode(idx);
+        if (_sigs is null || idx.Index >= 0) return plain;
+        var path = ImportSignatures.ResolveImportPath(_asset, idx);
+        if (path is null) return plain;
+        if (_sigs.ByFullKey.TryGetValue(path, out var sig))
+            return $"{sig.Class}::{sig.Func}";
+        return plain;
     }
 
     private static string DumpInline(KismetExpression e)

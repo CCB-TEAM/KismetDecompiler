@@ -8,7 +8,7 @@ using UAssetAPI.Unversioned;
 using UAssetKismet;
 using UAssetKismet.Experimental;
 
-// 用法: KismetDecompiler --uasset <path> --usmap <path> [--inline] [--opt] [--out <dir>]
+// 用法: KismetDecompiler --uasset <path> --usmap <path> [--inline] [--opt] [--out <dir>] [--uhtdump <dir>]
 string GetArg(string name)
 {
     var i = Array.IndexOf(args, name);
@@ -18,14 +18,16 @@ string GetArg(string name)
 var uassetPath = GetArg("--uasset");
 var usmapPath = GetArg("--usmap");
 var experimentalInline = args.Contains("--inline"); // 实验性：dispatch 内联回事件函数
-var optimize = args.Contains("--opt");              // 实验性：语义优化（行级值流）
+var optimize = args.Contains("--opt");              // 实验性：语义优化
 var outDir = GetArg("--out") is { Length: > 0 } o ? o : "Decompiled";
+var uhtDump = GetArg("--uhtdump");                  // UE4SS UHTHeaderDump 目录（import 函数签名）
 
 if (uassetPath.Length == 0 || usmapPath.Length == 0)
 {
-    Console.WriteLine("用法: KismetDecompiler --uasset <AssetRegistry/Blueprint.uasset> --usmap <mapping.usmap> [--inline] [--opt] [--out <dir>]");
+    Console.WriteLine("用法: KismetDecompiler --uasset <蓝图.uasset> --usmap <mapping.usmap> [--inline] [--opt] [--out <dir>] [--uhtdump <UHTHeaderDump>]");
     Console.WriteLine("  --inline   dispatch case 体内联回事件函数（实验）");
-    Console.WriteLine("  --opt      语义优化：CallFunc 临时量值流内联 / 常量折叠（实验）");
+    Console.WriteLine("  --opt      语义优化：临时量值流内联 / 常量折叠 / 命名简化（实验）");
+    Console.WriteLine("  --uhtdump  UE4SS 的 UHTHeaderDump 目录：额外输出 import 调用签名清单");
     return;
 }
 
@@ -59,6 +61,16 @@ if (uber is not null)
 
 Directory.CreateDirectory(outDir);
 
+// ============ 函数签名清单（UHT dump + 本地 LoadedProperties）============
+UhtSignatureIndex? sigIndex = null;
+if (uhtDump.Length > 0)
+{
+    Console.WriteLine($"[签名] 解析 UHTHeaderDump: {uhtDump}");
+    sigIndex = UhtSignatureIndex.Load(uhtDump);
+    Console.WriteLine($"[签名] 索引到 {sigIndex.ByFullKey.Count} 个 UFUNCTION");
+}
+WriteSignatures(outDir, asset, funcs, sigIndex);
+
 // ============ 实验模式：dispatch 内联回事件函数 ============
 if (experimentalInline)
 {
@@ -75,7 +87,7 @@ if (experimentalInline)
         if (fn == uber) continue;
         var name = fn.ObjectName.ToString();
         string code;
-        var inlined = UAssetKismet.Experimental.DispatchInliner.InlineOne(asset, uber, calls, fn);
+        var inlined = DispatchInliner.InlineOne(asset, uber, calls, fn, sigIndex);
         if (inlined is not null)
         {
             code = inlined;
@@ -83,7 +95,7 @@ if (experimentalInline)
         }
         else
         {
-            code = new StructuredKismetDecompiler(asset, name).Decompile(fn);
+            code = new StructuredKismetDecompiler(asset, name, sigIndex).Decompile(fn);
             code = ApplyOpt(code);
             File.WriteAllText(Path.Combine(inlineDir, name + ".txt"), code);
         }
@@ -101,16 +113,53 @@ foreach (var fn in funcs)
 {
     var name = fn.ObjectName.ToString();
     var code = fn == uber
-        ? StructuredKismetDecompiler.DecompileDispatch(asset, fn, calls)
-        : new StructuredKismetDecompiler(asset, name).Decompile(fn);
+        ? StructuredKismetDecompiler.DecompileDispatch(asset, fn, calls, sigIndex)
+        : new StructuredKismetDecompiler(asset, name, sigIndex).Decompile(fn);
     code = ApplyOpt(code);
     combined.AppendLine(code).AppendLine();
     File.WriteAllText(Path.Combine(outDir, name + ".txt"), code);
     Console.WriteLine(code);
 }
-File.WriteAllText(Path.Combine(outDir, "_all_functions.txt"), combined.ToString());
+File.WriteAllText(Path.Combine(outDir, "_all.txt"), combined.ToString());
 Console.WriteLine($"\n已写出 {funcs.Count} 个函数（含反 Dispatch）");
 
+// ---- 签名清单输出 ----
+void WriteSignatures(string dir, UAsset a, List<FunctionExport> fs, UhtSignatureIndex? idx)
+{
+    var sb = new StringBuilder();
+    sb.AppendLine("// ===== 本地函数签名（来自 LoadedProperties，启发式类型）=====");
+    foreach (var fn in fs)
+        sb.AppendLine(ImportSignatures.BuildLocalSig(fn));
+
+    if (idx is not null)
+    {
+        sb.AppendLine("\n// ===== import 调用签名（来自 UHTHeaderDump）=====");
+        var paths = new HashSet<string>();
+        foreach (var fn in fs)
+            if (fn.ScriptBytecode is not null)
+                ImportSignatures.CollectImportFuncs(a, fn.ScriptBytecode, paths);
+
+        var hit = 0;
+        foreach (var p in paths.OrderBy(x => x))
+        {
+            if (idx.ByFullKey.TryGetValue(p, out var sig))
+            {
+                sb.AppendLine($"// {sig}");
+                hit++;
+            }
+            else
+            {
+                sb.AppendLine($"// {p}   (未命中 UHT dump)");
+            }
+        }
+        Console.WriteLine($"[签名] import 调用 {paths.Count} 个，命中 UHT dump {hit} 个");
+    }
+
+    File.WriteAllText(Path.Combine(dir, "signatures.txt"), sb.ToString());
+    Console.WriteLine($"[签名] 已写出 {Path.Combine(dir, "signatures.txt")}");
+}
+
+// ---- 查找事件函数里对 ExecuteUbergraph 的调用 ----
 static int? FindUberCall(FunctionExport fn, int uberExportIdx)
 {
     int? found = null;

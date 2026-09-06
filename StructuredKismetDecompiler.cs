@@ -1,3 +1,4 @@
+using UAssetKismet.Experimental;
 using System.Text;
 using UAssetAPI;
 using UAssetAPI.ExportTypes;
@@ -38,10 +39,10 @@ public class StructuredKismetDecompiler
     private int _ind;
     private readonly string _funcName;
 
-    public StructuredKismetDecompiler(UAsset asset, string funcName)
+    public StructuredKismetDecompiler(UAsset asset, string funcName, UhtSignatureIndex? signatures = null)
     {
         _asset = asset;
-        _renderer = new ExprRenderer(asset);
+        _renderer = new ExprRenderer(asset, signatures);
         _funcName = funcName;
     }
 
@@ -63,9 +64,9 @@ public class StructuredKismetDecompiler
 
     /// <summary>反 Dispatch：把 ExecuteUbergraph 的 EntryPoint 跳转表还原为 switch-case。</summary>
     public static string DecompileDispatch(UAsset asset, FunctionExport uber,
-        IEnumerable<(long n, string caller)> calls)
+        IEnumerable<(long n, string caller)> calls, UhtSignatureIndex? signatures = null)
     {
-        var d = new StructuredKismetDecompiler(asset, uber.ObjectName.ToString());
+        var d = new StructuredKismetDecompiler(asset, uber.ObjectName.ToString(), signatures);
         return d.EmitDispatch(uber, calls.OrderBy(c => c.n).ToList());
     }
 

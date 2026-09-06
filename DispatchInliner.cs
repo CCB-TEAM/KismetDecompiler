@@ -1,3 +1,4 @@
+using UAssetKismet.Experimental;
 using System.Text;
 using UAssetAPI;
 using UAssetAPI.ExportTypes;
@@ -17,34 +18,37 @@ namespace UAssetKismet.Experimental;
 public static class DispatchInliner
 {
     public static string Run(UAsset asset, FunctionExport uber,
-        IReadOnlyList<(long n, string caller)> calls, IReadOnlyList<FunctionExport> funcs)
+        IReadOnlyList<(long n, string caller)> calls, IReadOnlyList<FunctionExport> funcs,
+        UhtSignatureIndex? signatures = null)
     {
         var sb = new StringBuilder();
         foreach (var fn in funcs)
         {
             if (ReferenceEquals(fn, uber)) continue;
-            sb.AppendLine(InlineOne(asset, uber, calls, fn)).AppendLine();
+            sb.AppendLine(InlineOne(asset, uber, calls, fn, signatures)).AppendLine();
         }
         return sb.ToString();
     }
 
     /// <summary>内联单个事件函数；无 dispatch 调用的函数返回 null（由调用方走普通结构化）。</summary>
     public static string? InlineOne(UAsset asset, FunctionExport uber,
-        IReadOnlyList<(long n, string caller)> calls, FunctionExport fn)
+        IReadOnlyList<(long n, string caller)> calls, FunctionExport fn,
+        UhtSignatureIndex? signatures = null)
     {
         var hasUberCall = calls.Any(c => c.caller == fn.ObjectName.ToString());
         if (!hasUberCall) return null;
-        return InlineFunction(asset, uber, asset.Exports.IndexOf(uber) + 1, calls, fn);
+        return InlineFunction(asset, uber, asset.Exports.IndexOf(uber) + 1, calls, fn, signatures);
     }
 
     private static string InlineFunction(UAsset asset, FunctionExport uber, int uberIdx,
-        IReadOnlyList<(long n, string caller)> calls, FunctionExport fn)
+        IReadOnlyList<(long n, string caller)> calls, FunctionExport fn,
+        UhtSignatureIndex? signatures)
     {
         var uberStmts = BuildStmts(asset, uber);
         var uberIdxOf = IndexOf(uberStmts);
         var callMap = calls.ToDictionary(c => c.n, c => c.caller);
 
-        var renderer = new ExprRenderer(asset);
+        var renderer = new ExprRenderer(asset, signatures);
         var exprs = fn.ScriptBytecode ?? Array.Empty<KismetExpression>();
         var lines = new List<string>();
 
