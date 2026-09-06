@@ -46,8 +46,8 @@ public class ExprRenderer
                 return $"{RenderVariablePath(l.DestinationProperty)} = {Render(l.AssignmentExpression)}";
 
             // 函数调用（子类在前）
-            case EX_CallMath f: return $"{ResolveCallName(f.StackNode)}({RenderParams(f.Parameters)})";
-            case EX_FinalFunction f: return $"{ResolveCallName(f.StackNode)}({RenderParams(f.Parameters)})";
+            case EX_CallMath f: return RenderCall(f.StackNode, f.Parameters);
+            case EX_FinalFunction f: return RenderCall(f.StackNode, f.Parameters);
             case EX_LocalVirtualFunction f: return $"{f.VirtualFunctionName}({RenderParams(f.Parameters)})";
             case EX_VirtualFunction f: return $"{f.VirtualFunctionName}({RenderParams(f.Parameters)})";
             case EX_InstanceDelegate d: return d.FunctionName.ToString();
@@ -125,6 +125,30 @@ public class ExprRenderer
         if (_sigs.ByFullKey.TryGetValue(path, out var sig))
             return $"{sig.Class}::{sig.Func}";
         return plain;
+    }
+
+    /// <summary>渲染函数调用；命中 UHT 签名时按位置给 out 实参加 out 前缀。</summary>
+    public string RenderCall(FPackageIndex idx, KismetExpression[]? ps)
+    {
+        var name = ResolveCallName(idx);
+        if (ps is null || ps.Length == 0) return $"{name}()";
+        var mods = ResolveParamMods(idx);
+        if (mods is not null && mods.Length == ps.Length)
+        {
+            var parts = new string[ps.Length];
+            for (var i = 0; i < ps.Length; i++)
+                parts[i] = mods[i] == "out" ? $"out {Render(ps[i])}" : Render(ps[i]);
+            return $"{name}({string.Join(", ", parts)})";
+        }
+        return $"{name}({RenderParams(ps)})";
+    }
+
+    private string[]? ResolveParamMods(FPackageIndex idx)
+    {
+        if (_sigs is null || idx.Index >= 0) return null;
+        var path = ImportSignatures.ResolveImportPath(_asset, idx);
+        if (path is null) return null;
+        return _sigs.ByFullKey.TryGetValue(path, out var s) ? s.ParamModifiers() : null;
     }
 
     private static string DumpInline(KismetExpression e)

@@ -11,8 +11,70 @@ public sealed class UhtFuncSig
     public string RetType = "";      // 返回类型
     public string Params = "";       // 参数列表（原样），可空
     public bool IsStatic;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    private string[]? _mods;
+    [System.Text.Json.Serialization.JsonIgnore]
+    private bool _modsParsed;
+
     public override string ToString() =>
         $"{RetType} {Class}::{Func}({Params})";
+
+    /// <summary>
+    /// 按位置返回每个形参的修饰：""（输入）或 "out"（可变引用/输出）。
+    /// 依据 UHT 文本启发式：const &amp; / 值 → in；非 const 的 &amp; / UPARAM(Ref) / UPARAM(Out) → out。
+    /// </summary>
+    public string[] ParamModifiers()
+    {
+        if (_modsParsed) return _mods ?? Array.Empty<string>();
+        _modsParsed = true;
+        _mods = ParseMods(Params);
+        return _mods;
+    }
+
+    private static string[] ParseMods(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return Array.Empty<string>();
+        var parts = SplitTopLevel(text, ',');
+        var mods = new string[parts.Count];
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var p = parts[i].Trim();
+            // 剥掉 UPARAM(...) 前缀（括号可能嵌套）
+            var depth = 0;
+            for (var j = 0; j < p.Length; j++)
+            {
+                if (p[j] == '(') depth++;
+                else if (p[j] == ')' && --depth < 0) { p = p.Substring(j + 1).TrimStart(); break; }
+            }
+            var isRefLike = p.Contains("UPARAM") && (p.Contains("Ref") || p.Contains("Out"));
+            var isConst = p.StartsWith("const");
+            var hasAmp = p.Contains('&') && !isConst; // const& 是输入
+            mods[i] = isRefLike || hasAmp ? "out" : "";
+        }
+        return mods;
+    }
+
+    /// <summary>按顶层分隔符切分，忽略 &lt;&gt; 与 () 内部。</summary>
+    private static List<string> SplitTopLevel(string s, char sep)
+    {
+        var result = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (c is '<' or '(' or '[') depth++;
+            else if (c is '>' or ')' or ']') depth--;
+            else if (c == sep && depth == 0)
+            {
+                result.Add(s.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+        result.Add(s.Substring(start));
+        return result;
+    }
 }
 
 /// <summary>
