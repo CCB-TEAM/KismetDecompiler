@@ -115,22 +115,10 @@ public class ExprRenderer
         return $"<fn:{idx.Index}>";
     }
 
-    /// <summary>解析函数名；命中 UHT 签名时渲染为 类::函数 形式（import 方向）。</summary>
-    public string ResolveCallName(FPackageIndex idx)
-    {
-        var plain = ResolveStackNode(idx);
-        if (_sigs is null || idx.Index >= 0) return plain;
-        var path = ImportSignatures.ResolveImportPath(_asset, idx);
-        if (path is null) return plain;
-        if (_sigs.ByFullKey.TryGetValue(path, out var sig))
-            return $"{sig.Class}::{sig.Func}";
-        return plain;
-    }
-
-    /// <summary>渲染函数调用；命中 UHT 签名时按位置给 out 实参加 out 前缀。</summary>
+    /// <summary>渲染函数调用；命中 UHT 签名时按位置给 out 实参加 out 前缀（调用名不限定类）。</summary>
     public string RenderCall(FPackageIndex idx, KismetExpression[]? ps)
     {
-        var name = ResolveCallName(idx);
+        var name = ResolveStackNode(idx);
         if (ps is null || ps.Length == 0) return $"{name}()";
         var mods = ResolveParamMods(idx);
         if (mods is not null && mods.Length == ps.Length)
