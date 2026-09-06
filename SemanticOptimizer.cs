@@ -15,17 +15,81 @@ public static class SemanticOptimizer
     private static readonly Regex AssignRegex = new(
         @"^(?<indent>\s*)(?<lhs>[A-Za-z_]\w*)\s*=\s*(?<rhs>.+?);\s*$", RegexOptions.Compiled);
 
-    /// <summary>把临时量内联到使用处；返回优化后的行列表（保留缩进）。</summary>
+    /// <summary>树改写入口：按括号树分块做 copy-prop，再做常量折叠与命名简化。</summary>
     public static List<string> OptimizeLines(List<string> lines)
     {
         var result = new List<string>(lines);
-        for (var pass = 0; pass < 6; pass++)
+        for (var pass = 0; pass < 8; pass++)
         {
-            if (!Pass(result)) break;
+            if (!PassTree(result)) break;
         }
+        // 删除被内联消除的赋值行（置空标记）
+        result.RemoveAll(l => string.IsNullOrWhiteSpace(l.Trim('\r', '\n', ' ')));
         result = FoldConstants(result);
         result = SimplifyNames(result);
         return result;
+    }
+
+    /// <summary>树版 pass：每个 { } 块内的叶子语句序列独立做 copy-prop（跨块/跨 if 天然隔离）。</summary>
+    private static bool PassTree(List<string> lines)
+    {
+        var root = PseudoTreeParser.Parse(lines);
+        var changed = false;
+
+        // 遍历所有"块容器"（root 与每个 '{'），对每个容器内同父叶子序列处理
+        void VisitBlock(StmtNode block)
+        {
+            var seq = block.Children
+                .Where(c => c.Text != "{" && c.LineIndex >= 0 && !c.Text.TrimStart().StartsWith("//"))
+                .ToList();
+
+            // 收集单次赋值临时量（叶子）
+            var tempDefs = new Dictionary<string, (int nodeIdx, int defLine, string rhs)>();
+            for (var k = 0; k < seq.Count; k++)
+            {
+                var m = AssignRegex.Match(seq[k].Text);
+                if (!m.Success) continue;
+                var lhs = m.Groups["lhs"].Value;
+                if (!IsTempLike(lhs)) continue;
+                if (tempDefs.ContainsKey(lhs)) tempDefs.Remove(lhs);
+                else tempDefs[lhs] = (k, seq[k].LineIndex, m.Groups["rhs"].Value);
+            }
+
+            foreach (var (temp, info) in tempDefs)
+            {
+                if (info.nodeIdx + 1 >= seq.Count) continue;
+                int useIdx = -1, useCount = 0;
+                for (var k = info.nodeIdx + 1; k < seq.Count; k++)
+                {
+                    if (CountToken(seq[k].Text, temp) > 0)
+                    {
+                        useCount++;
+                        useIdx = k;
+                        if (useCount > 1) break;
+                    }
+                }
+                if (useCount != 1 || useIdx < 0) continue;
+
+                // 安全约束：def 与 use 之间只能隔纯复制行（无副作用）
+                var betweenOk = true;
+                for (var k = info.nodeIdx + 1; k < useIdx; k++)
+                {
+                    if (!IsPureCopy(seq[k].Text)) { betweenOk = false; break; }
+                }
+                if (!betweenOk) continue;
+
+                if (!TryInlineIntoLine(seq[useIdx].Text, temp, info.rhs, out var newLine)) continue;
+                lines[seq[useIdx].LineIndex] = newLine; // 行直改（无渲染往返）
+                lines[info.defLine] = "";                // 标记删除
+                changed = true;
+            }
+
+            foreach (var c in block.Children)
+                if (c.Text == "{") VisitBlock(c);
+        }
+
+        VisitBlock(root);
+        return changed;
     }
 
     private static bool Pass(List<string> lines)
