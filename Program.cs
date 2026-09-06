@@ -133,7 +133,7 @@ void WriteSignatures(string dir, UAsset a, List<FunctionExport> fs, UhtSignature
 
     if (idx is not null)
     {
-        sb.AppendLine("\n// ===== import 调用签名（来自 UHTHeaderDump）=====");
+        sb.AppendLine("\n// ===== import 调用签名（UHT，仅命中项）=====");
         var paths = new HashSet<string>();
         foreach (var fn in fs)
             if (fn.ScriptBytecode is not null)
@@ -146,10 +146,6 @@ void WriteSignatures(string dir, UAsset a, List<FunctionExport> fs, UhtSignature
             {
                 sb.AppendLine($"// {sig}");
                 hit++;
-            }
-            else
-            {
-                sb.AppendLine($"// {p}   (未命中 UHT dump)");
             }
         }
         Console.WriteLine($"[签名] import 调用 {paths.Count} 个，命中 UHT dump {hit} 个");

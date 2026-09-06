@@ -16,6 +16,7 @@ public class StructuredKismetDecompiler
 {
     private readonly UAsset _asset;
     private readonly ExprRenderer _renderer;
+    private readonly UhtSignatureIndex? _sigs;
 
     // 基本块
     private sealed class Block
@@ -43,7 +44,21 @@ public class StructuredKismetDecompiler
     {
         _asset = asset;
         _renderer = new ExprRenderer(asset, signatures);
+        _sigs = signatures;
         _funcName = funcName;
+    }
+
+    /// <summary>收集该函数体内命中的 import 调用，输出为函数头注释（真实 UHT 签名，含 out/ref 修饰）。</summary>
+    public string UhtHeaderComment(FunctionExport fn)
+    {
+        if (_sigs is null || fn.ScriptBytecode is null) return "";
+        var paths = new HashSet<string>();
+        ImportSignatures.CollectImportFuncs(_asset, fn.ScriptBytecode, paths);
+        var sb = new StringBuilder();
+        foreach (var p in paths.OrderBy(x => x))
+            if (_sigs.ByFullKey.TryGetValue(p, out var s))
+                sb.Append("// ").AppendLine(s.ToString());
+        return sb.ToString();
     }
 
     public string Decompile(FunctionExport fn)
@@ -59,7 +74,9 @@ public class StructuredKismetDecompiler
             try { pos += exprs[i].GetSize(_asset); } catch { pos += 1; }
         }
         // 过滤空语句（Nothing/EndOfScript 保留跳转位置）
-        return BuildAndStrucuture(fn);
+        var body = BuildAndStrucuture(fn);
+        var hdr = UhtHeaderComment(fn);
+        return hdr.Length > 0 ? hdr + body : body;
     }
 
     /// <summary>反 Dispatch：把 ExecuteUbergraph 的 EntryPoint 跳转表还原为 switch-case。</summary>
@@ -67,7 +84,9 @@ public class StructuredKismetDecompiler
         IEnumerable<(long n, string caller)> calls, UhtSignatureIndex? signatures = null)
     {
         var d = new StructuredKismetDecompiler(asset, uber.ObjectName.ToString(), signatures);
-        return d.EmitDispatch(uber, calls.OrderBy(c => c.n).ToList());
+        var body = d.EmitDispatch(uber, calls.OrderBy(c => c.n).ToList());
+        var hdr = d.UhtHeaderComment(uber);
+        return hdr.Length > 0 ? hdr + body : body;
     }
 
     private string EmitDispatch(FunctionExport uber, List<(long n, string caller)> calls)
