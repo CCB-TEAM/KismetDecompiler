@@ -19,15 +19,22 @@ public static class DispatchInliner
     public static string Run(UAsset asset, FunctionExport uber,
         IReadOnlyList<(long n, string caller)> calls, IReadOnlyList<FunctionExport> funcs)
     {
-        var uberIdx = uber is null ? -1 : asset.Exports.IndexOf(uber) + 1; // FPackageIndex: export 从 1
         var sb = new StringBuilder();
         foreach (var fn in funcs)
         {
             if (ReferenceEquals(fn, uber)) continue;
-            var inlined = InlineFunction(asset, uber, uberIdx, calls, fn);
-            sb.AppendLine(inlined).AppendLine();
+            sb.AppendLine(InlineOne(asset, uber, calls, fn)).AppendLine();
         }
         return sb.ToString();
+    }
+
+    /// <summary>内联单个事件函数；无 dispatch 调用的函数返回 null（由调用方走普通结构化）。</summary>
+    public static string? InlineOne(UAsset asset, FunctionExport uber,
+        IReadOnlyList<(long n, string caller)> calls, FunctionExport fn)
+    {
+        var hasUberCall = calls.Any(c => c.caller == fn.ObjectName.ToString());
+        if (!hasUberCall) return null;
+        return InlineFunction(asset, uber, asset.Exports.IndexOf(uber) + 1, calls, fn);
     }
 
     private static string InlineFunction(UAsset asset, FunctionExport uber, int uberIdx,

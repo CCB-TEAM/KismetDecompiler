@@ -8,11 +8,26 @@ using UAssetAPI.Unversioned;
 using UAssetKismet;
 using UAssetKismet.Experimental;
 
-var uassetPath = @"H:\.vscode\Output\Exports\kards\Content\Blueprints\Cards\BrawlCards\card_brawl_test1.uasset";
-var usmapPath = @"H:\.vscode\m.usmap";
-var outDir = @"H:\go-cache\KismetDecompiler\Decompiled";
+// 用法: KismetDecompiler --uasset <path> --usmap <path> [--inline] [--opt] [--out <dir>]
+string GetArg(string name)
+{
+    var i = Array.IndexOf(args, name);
+    return i >= 0 && i + 1 < args.Length ? args[i + 1] : "";
+}
+
+var uassetPath = GetArg("--uasset");
+var usmapPath = GetArg("--usmap");
 var experimentalInline = args.Contains("--inline"); // 实验性：dispatch 内联回事件函数
 var optimize = args.Contains("--opt");              // 实验性：语义优化（行级值流）
+var outDir = GetArg("--out") is { Length: > 0 } o ? o : "Decompiled";
+
+if (uassetPath.Length == 0 || usmapPath.Length == 0)
+{
+    Console.WriteLine("用法: KismetDecompiler --uasset <AssetRegistry/Blueprint.uasset> --usmap <mapping.usmap> [--inline] [--opt] [--out <dir>]");
+    Console.WriteLine("  --inline   dispatch case 体内联回事件函数（实验）");
+    Console.WriteLine("  --opt      语义优化：CallFunc 临时量值流内联 / 常量折叠（实验）");
+    return;
+}
 
 string ApplyOpt(string code)
 {
@@ -47,11 +62,35 @@ Directory.CreateDirectory(outDir);
 // ============ 实验模式：dispatch 内联回事件函数 ============
 if (experimentalInline)
 {
+    if (uber is null)
+    {
+        Console.WriteLine("未找到 ExecuteUbergraph 函数，无法内联");
+        return;
+    }
     var inlineDir = Path.Combine(outDir, "Inline");
     Directory.CreateDirectory(inlineDir);
-    var text = UAssetKismet.Experimental.DispatchInliner.Run(asset, uber, calls, funcs);
-    File.WriteAllText(Path.Combine(inlineDir, "_inlined_functions.txt"), text);
-    Console.WriteLine(text);
+    var combinedInline = new StringBuilder();
+    foreach (var fn in funcs)
+    {
+        if (fn == uber) continue;
+        var name = fn.ObjectName.ToString();
+        string code;
+        var inlined = UAssetKismet.Experimental.DispatchInliner.InlineOne(asset, uber, calls, fn);
+        if (inlined is not null)
+        {
+            code = inlined;
+            File.WriteAllText(Path.Combine(inlineDir, name + ".inline.txt"), code);
+        }
+        else
+        {
+            code = new StructuredKismetDecompiler(asset, name).Decompile(fn);
+            code = ApplyOpt(code);
+            File.WriteAllText(Path.Combine(inlineDir, name + ".txt"), code);
+        }
+        combinedInline.AppendLine(code).AppendLine();
+        Console.WriteLine(code);
+    }
+    File.WriteAllText(Path.Combine(inlineDir, "_all.txt"), combinedInline.ToString());
     Console.WriteLine($"\n[实验] 已内联 {calls.Count} 个 dispatch 调用点 → {inlineDir}");
     return;
 }

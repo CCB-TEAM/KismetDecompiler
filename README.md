@@ -9,23 +9,32 @@
 - **控制流结构化**：CFG 切块 + if/else/汇合反转还原（17/19 函数零 goto）
 - **反 Dispatch**：识别 `ExecuteUbergraph`（`ComputedJump(EntryPoint)` 起手，EntryPoint == 字节偏移），还原为 `switch (EntryPoint)`，case 标注来源事件函数
 - **Dispatch 内联**（实验）：case 体内联回各事件函数，跳转段栈式追踪内联
-- **语义优化**（实验）：CallFunc 临时量值流内联（`Temp = IsValid(x); if(!Temp)` → `if(!IsValid(x))`）
+- **语义优化**（实验）：临时量值流内联（含跨纯赋值行传播）、`CallFunc_` 命名简化、常量折叠
 - 全程作为开关叠加，不覆盖基础路径
 
 ## 用法
 
 ```
-用法: KismetDecompiler [--inline] [--opt]
-  (默认) 结构化反编译全部函数 + ExecuteUbergraph 反 Dispatch
-  --inline   dispatch case 体内联回事件函数（实验）
-  --opt      语义优化：临时量值流内联 / 常量折叠（实验）
+用法: KismetDecompiler --uasset <蓝图.uasset> --usmap <mapping.usmap> [--inline] [--opt] [--out <dir>]
+
+  --uasset  目标 .uasset 蓝图文件
+  --usmap   UE5 unversioned properties 映射文件（.usmap）
+  --out     输出目录（默认 ./Decompiled）
+  --inline  dispatch case 体内联回事件函数（实验）
+  --opt     语义优化：临时量值流内联 / 常量折叠 / 命名简化（实验）
 ```
 
-测试用例（硬编码于 Program.cs，可按需改为参数）：
-- `.uasset`: `H:\.vscode\Output\Exports\kards\Content\Blueprints\Cards\BrawlCards\card_brawl_test1.uasset` (UE 5.6)
-- `.usmap`: `H:\.vscode\m.usmap`
+示例：
 
-产物输出到 `Decompiled\`（`*.txt` 每函数一个 + `_all_functions.txt`）。
+```bash
+# 默认：结构化反编译 + ExecuteUbergraph 反 Dispatch
+KismetDecompiler --uasset BP_Card.uasset --usmap mappings.usmap
+
+# 开启全部实验特性
+KismetDecompiler --uasset BP_Card.uasset --usmap mappings.usmap --inline --opt
+```
+
+产物输出到 `Decompiled\`（每函数一个 `*.txt` + `_all.txt`；`--inline` 时事件内联版在 `Decompiled\Inline\`）。
 
 ## 项目结构
 

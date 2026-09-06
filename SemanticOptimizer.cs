@@ -15,7 +15,7 @@ public static class SemanticOptimizer
     private static readonly Regex AssignRegex = new(
         @"^(?<indent>\s*)(?<lhs>[A-Za-z_]\w*)\s*=\s*(?<rhs>.+?);\s*$", RegexOptions.Compiled);
 
-    /// <summary>把临时量内联到参数位；返回优化后的行列表（保留缩进）。</summary>
+    /// <summary>把临时量内联到使用处；返回优化后的行列表（保留缩进）。</summary>
     public static List<string> OptimizeLines(List<string> lines)
     {
         var result = new List<string>(lines);
@@ -23,7 +23,9 @@ public static class SemanticOptimizer
         {
             if (!Pass(result)) break;
         }
-        return FoldConstants(result);
+        result = FoldConstants(result);
+        result = SimplifyNames(result);
+        return result;
     }
 
     private static bool Pass(List<string> lines)
@@ -60,8 +62,13 @@ public static class SemanticOptimizer
             }
             if (useCount != 1 || useIdx < 0) continue;
 
-            // 安全约束：赋值行与使用行必须相邻（中间无其它语句，保证求值顺序不变）
-            if (useIdx != defIdx + 1) continue;
+            // 安全约束：赋值行与使用行之间只能隔"纯标识符复制行"（无调用/无副作用），保证求值顺序不变
+            var betweenOk = true;
+            for (var k = defIdx + 1; k < useIdx; k++)
+            {
+                if (!IsPureCopy(lines[k])) { betweenOk = false; break; }
+            }
+            if (!betweenOk) continue;
 
             if (!TryInlineIntoLine(lines[useIdx], temp, rhs, out var newLine)) continue;
             lines[useIdx] = newLine;
@@ -130,6 +137,27 @@ public static class SemanticOptimizer
     }
 
     private static bool IsComment(string line) => line.TrimStart().StartsWith("//");
+
+    /// <summary>纯标识符复制行（形如 `K2Node_Event_x = param;`，无函数调用/无副作用）。</summary>
+    private static readonly Regex PureCopyRegex = new(
+        @"^\s*[A-Za-z_]\w*\s*=\s*[A-Za-z_][\w.]*\s*;\s*$", RegexOptions.Compiled);
+    private static bool IsPureCopy(string line)
+    {
+        if (IsComment(line)) return false;
+        return PureCopyRegex.IsMatch(line) && !line.Contains("(");
+    }
+
+    /// <summary>P4 命名简化：去掉编译器临时量的统一前缀 CallFunc_（所有引用同步去掉，保持唯一性）。</summary>
+    private static List<string> SimplifyNames(List<string> lines)
+    {
+        var outLines = new List<string>(lines.Count);
+        foreach (var l in lines)
+        {
+            if (IsComment(l)) { outLines.Add(l); continue; }
+            outLines.Add(Regex.Replace(l, @"(?<![\w.])CallFunc_", ""));
+        }
+        return outLines;
+    }
 
     private static bool IsTempLike(string lhs) =>
         lhs.StartsWith("CallFunc_") || lhs.Contains("ReturnValue");
